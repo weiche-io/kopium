@@ -345,7 +345,7 @@ fn extract_container(
         // Create member and wrap types correctly
         let member_doc = value.description.clone();
         if reqs.contains(key) {
-            log::debug!("with required member {} of type {}", key, &rust_type);
+            log::debug!("with required member {} of type {}", key, rust_type);
             members.push(Member {
                 type_: rust_type,
                 name: key.to_string(),
@@ -457,7 +457,7 @@ fn array_recurse_for_type(
                     "boolean" => Ok(("Vec<bool>".into(), level)),
                     "date" => Ok((format!("Vec<{}>", extract_date_type(value)?), level)),
                     "number" => Ok((format!("Vec<{}>", extract_number_type(value)?), level)),
-                    "integer" => Ok((format!("Vec<{}>", extract_integer_type(value)?), level)),
+                    "integer" => Ok((format!("Vec<{}>", extract_integer_type(s)?), level)),
                     "array" => {
                         if s.items.is_some() {
                             let (array_type, recurse_level) =
@@ -592,25 +592,79 @@ fn extract_number_type(value: &JSONSchemaProps) -> anyhow::Result<String> {
 }
 
 fn extract_integer_type(value: &JSONSchemaProps) -> anyhow::Result<String> {
-    // Think kubernetes go types just do signed ints, but set a minimum to zero...
-    // rust will set uint, so emitting that when possible
-    Ok(if let Some(f) = &value.format {
-        match f.as_ref() {
-            "int8" => "i8".to_string(),
-            "int16" => "i16".to_string(),
-            "int32" => "i32".to_string(),
-            "int64" => "i64".to_string(),
-            "int128" => "i128".to_string(),
-            "uint8" => "u8".to_string(),
-            "uint16" => "u16".to_string(),
-            "uint32" => "u32".to_string(),
-            "uint64" => "u64".to_string(),
-            "uint128" => "u128".to_string(),
-            _ => "i64".to_string(),
+    // schema bounds constrain the format's domain; they must not widen it.
+    let (fallback, mut minimum, mut maximum) = match value.format.as_deref() {
+        Some("int8") => ("i8", i128::from(i8::MIN), Some(i128::from(i8::MAX))),
+        Some("int16") => ("i16", i128::from(i16::MIN), Some(i128::from(i16::MAX))),
+        Some("int32") => ("i32", i128::from(i32::MIN), Some(i128::from(i32::MAX))),
+        Some("int128") => ("i128", i128::MIN, Some(i128::MAX)),
+        Some("uint8") => ("u8", 0, Some(i128::from(u8::MAX))),
+        Some("uint16") => ("u16", 0, Some(i128::from(u16::MAX))),
+        Some("uint32") => ("u32", 0, Some(i128::from(u32::MAX))),
+        Some("uint64") => ("u64", 0, Some(i128::from(u64::MAX))),
+        Some("uint128") => ("u128", 0, None),
+        _ => ("i64", i128::from(i64::MIN), Some(i128::from(i64::MAX))),
+    };
+    let bounds = [value.minimum, value.maximum];
+    anyhow::ensure!(
+        bounds.iter().flatten().all(|bound| bound.is_finite()),
+        "integer schema bounds must be finite"
+    );
+    // JSONSchemaProps stores bounds as f64; large integers may already be rounded.
+    if bounds
+        .iter()
+        .flatten()
+        .any(|bound| bound.abs() >= 9_007_199_254_740_992.0)
+    {
+        return Ok(fallback.to_string());
+    }
+    if let Some(bound) = value.minimum {
+        let bound = if value.exclusive_minimum == Some(true) {
+            bound.floor() as i128 + 1
+        } else {
+            bound.ceil() as i128
+        };
+        minimum = minimum.max(bound);
+    }
+    if let Some(bound) = value.maximum {
+        let bound = if value.exclusive_maximum == Some(true) {
+            bound.ceil() as i128 - 1
+        } else {
+            bound.floor() as i128
+        };
+        maximum = Some(maximum.map_or(bound, |maximum| maximum.min(bound)));
+    }
+    let Some(maximum) = maximum else {
+        return Ok(fallback.to_string());
+    };
+    anyhow::ensure!(
+        minimum <= maximum,
+        "integer schema has an empty range within {fallback}"
+    );
+    let inferred = if minimum >= 0 {
+        if u8::try_from(maximum).is_ok() {
+            "u8"
+        } else if u16::try_from(maximum).is_ok() {
+            "u16"
+        } else if u32::try_from(maximum).is_ok() {
+            "u32"
+        } else if u64::try_from(maximum).is_ok() {
+            "u64"
+        } else {
+            "u128"
         }
+    } else if i8::try_from(minimum).is_ok() && i8::try_from(maximum).is_ok() {
+        "i8"
+    } else if i16::try_from(minimum).is_ok() && i16::try_from(maximum).is_ok() {
+        "i16"
+    } else if i32::try_from(minimum).is_ok() && i32::try_from(maximum).is_ok() {
+        "i32"
+    } else if i64::try_from(minimum).is_ok() && i64::try_from(maximum).is_ok() {
+        "i64"
     } else {
-        "i64".to_string()
-    })
+        "i128"
+    };
+    Ok(inferred.to_string())
 }
 
 // unit tests particular schema patterns

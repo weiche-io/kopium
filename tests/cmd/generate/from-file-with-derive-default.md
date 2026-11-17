@@ -376,7 +376,7 @@ pub struct PostgresqlSpec {
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "nodeAffinity")]
     pub node_affinity: Option<PostgresqlNodeAffinity>,
     #[serde(rename = "numberOfInstances")]
-    pub number_of_instances: i64,
+    pub number_of_instances: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patroni: Option<PostgresqlPatroni>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "podAnnotations")]
@@ -472,7 +472,7 @@ pub struct PostgresqlConnectionPooler {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<PostgresqlConnectionPoolerMode>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "numberOfInstances")]
-    pub number_of_instances: Option<i64>,
+    pub number_of_instances: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<PostgresqlConnectionPoolerResources>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
